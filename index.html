@@ -225,7 +225,7 @@ body {
 <body>
 
 <div id="header">
-  <h1>Global Development Indicators -; GDP, Education &amp; Human Development (2000–2020)</h1>
+  <h1>Global Development Indicators - GDP, Education &amp; Human Development (2000–2020)</h1>
   <div id="slider-row">
     <label>Year:</label>
     <div>
@@ -241,7 +241,7 @@ body {
 <div id="panels">
   <!-- LEFT: Choropleth Map -->
   <div id="map-panel">
-    <div class="panel-title">GDP per Capita (USD) -; Choropleth</div>
+    <div class="panel-title">GDP per Capita (USD) - Choropleth</div>
     <svg id="map-svg"></svg>
     <div id="map-legend-row"></div>
   </div>
@@ -282,23 +282,22 @@ const REGION_SHORT = {
   "Sub-Saharan Africa":         "Sub-Saharan Africa"
 };
 
-// Distinct hues for each region
 const REGION_COLORS = d3.scaleOrdinal()
   .domain(REGIONS)
   .range(["#4fc3f7","#81c784","#ffb74d","#ce93d8","#ef5350","#fff176","#ff8a65"]);
 
-let selectedYear   = 2010;
-let selectedCountry = null;   // full country object or null
+let selectedYear    = 2010;
+let selectedCountry = null;   // null = default mode; object = focus mode
 const hiddenRegions = new Set();
 
-// Data lookups built after load
-let countriesArr = [];              // array of country objects
-let isoLookup    = new Map();       // iso_numeric (number) → country
-let codeToIso    = new Map();       // country_code → iso_numeric
+let countriesArr = [];
+let isoLookup    = new Map();   // iso_numeric (number) → country
+let codeToIso    = new Map();   // country_code → iso_numeric
 
 let gdpColorScale;
 let xScale, yScale;
 let scatterG, mapG;
+let clearBtnG;   // SVG group for "✕ Clear selection"
 
 // ═══════════════════════════════════════════════════
 //  TOOLTIP
@@ -336,6 +335,55 @@ function moveTip(event) {
 function hideTip() { ttDiv.style("display", "none"); }
 
 // ═══════════════════════════════════════════════════
+//  DATA HELPERS
+// ═══════════════════════════════════════════════════
+// Returns true only when BOTH gdp and enrollment are valid for this year
+function hasValidData(country, year) {
+  const yr  = country.years[year];
+  if (!yr) return false;
+  const gdp = yr.gdp_per_capita;
+  const enr = yr.school_enrollment_secondary;
+  return gdp != null && isFinite(gdp) && gdp > 0 &&
+         enr != null && isFinite(enr);
+}
+
+function getScatterX(country, year) {
+  const yr = country.years[year];
+  if (!yr) return null;
+  const v = yr.gdp_per_capita;
+  return (v != null && isFinite(v) && v > 0) ? xScale(v) : null;
+}
+
+function getScatterY(country, year) {
+  const yr = country.years[year];
+  if (!yr) return null;
+  const v = yr.school_enrollment_secondary;
+  return (v != null && isFinite(v)) ? yScale(v) : null;
+}
+
+// Dot visible in default mode: region not hidden AND both values valid
+function defaultDotVisible(d) {
+  if (hiddenRegions.has(d.region)) return false;
+  return hasValidData(d, selectedYear);
+}
+
+// Three-state appearance for a default-mode dot at a given year:
+//   "full"  — both values valid: normal dot
+//   "ghost" — gdp valid, enrollment null, last known y position found
+//   "hide"  — gdp missing, or no prior enrollment at all
+function defaultDotState(d, year) {
+  if (hiddenRegions.has(d.region)) return { mode: "hide" };
+  const x  = getScatterX(d, year);
+  const yv = getScatterY(d, year);
+  if (x !== null && yv !== null) return { mode: "full",  cx: x,    cy: yv   };
+  if (x !== null) {
+    const last = getLastKnownPos(d, year);
+    if (last) return { mode: "ghost", cx: last.x, cy: last.y };
+  }
+  return { mode: "hide" };
+}
+
+// ═══════════════════════════════════════════════════
 //  COLOR SCALE
 // ═══════════════════════════════════════════════════
 function buildGdpColorScale() {
@@ -347,8 +395,12 @@ function buildGdpColorScale() {
     });
   });
   vals.sort(d3.ascending);
-  const cap = d3.quantile(vals, 0.97);   // cap outliers
-  return d3.scaleSequential(d3.interpolateYlOrRd).domain([0, cap]).clamp(true);
+  const cap = d3.quantile(vals, 0.97);
+  const sqrtScale = d3.scalePow().exponent(0.4).domain([0, cap]).range([0, 1]).clamp(true);
+  const colorFn = v => d3.interpolateYlOrRd(sqrtScale(v));
+  colorFn._sqrtScale = sqrtScale;
+  colorFn._cap = cap;
+  return colorFn;
 }
 
 function mapColor(isoId) {
@@ -369,27 +421,18 @@ function initMap(topo) {
   const W    = rect.width  || 700;
   const H    = rect.height || 420;
 
-  const svg  = d3.select("#map-svg");
-  mapG       = svg.append("g");
+  const svg = d3.select("#map-svg");
+  mapG      = svg.append("g");
 
-  const projection = d3.geoEckert6()
-    .fitSize([W, H], { type: "Sphere" });
+  const projection = d3.geoEckert6().fitSize([W, H], { type: "Sphere" });
+  const path       = d3.geoPath().projection(projection);
 
-  const path = d3.geoPath().projection(projection);
+  mapG.append("path").datum({ type: "Sphere" })
+    .attr("class", "sphere-bg").attr("d", path);
 
-  // Ocean / sphere background
-  mapG.append("path")
-    .datum({ type: "Sphere" })
-    .attr("class", "sphere-bg")
-    .attr("d", path);
+  mapG.append("path").datum(d3.geoGraticule()())
+    .attr("class", "graticule").attr("d", path);
 
-  // Graticule
-  mapG.append("path")
-    .datum(d3.geoGraticule()())
-    .attr("class", "graticule")
-    .attr("d", path);
-
-  // Countries
   const features = topojson.feature(topo, topo.objects.countries).features;
 
   mapG.selectAll(".country-path")
@@ -403,17 +446,14 @@ function initMap(topo) {
         if (c) { showTip(event, c); d3.select(this).raise(); }
       })
       .on("mousemove", moveTip)
-      .on("mouseout",  function() { hideTip(); })
+      .on("mouseout",  () => hideTip())
       .on("click",     function(event, d) {
         const c = isoLookup.get(parseInt(d.id, 10));
         if (c) handleCountrySelect(c);
       });
 
-  // Sphere border on top
-  mapG.append("path")
-    .datum({ type: "Sphere" })
-    .attr("class", "map-border")
-    .attr("d", path);
+  mapG.append("path").datum({ type: "Sphere" })
+    .attr("class", "map-border").attr("d", path);
 
   buildMapLegend(W);
 }
@@ -424,37 +464,45 @@ function updateMapColors() {
     .attr("fill", d => mapColor(d.id));
 }
 
+function updateMapHighlight() {
+  mapG.selectAll(".country-path")
+    .attr("stroke", d => {
+      if (!selectedCountry) return "#1a1a2e";
+      const c = isoLookup.get(parseInt(d.id, 10));
+      return (c && c.country_code === selectedCountry.country_code) ? "#fff" : "#1a1a2e";
+    })
+    .attr("stroke-width", d => {
+      if (!selectedCountry) return 0.35;
+      const c = isoLookup.get(parseInt(d.id, 10));
+      return (c && c.country_code === selectedCountry.country_code) ? 2 : 0.35;
+    });
+}
+
 function buildMapLegend(mapW) {
-  const row  = d3.select("#map-legend-row");
-  const lW   = Math.min(260, mapW * 0.45);
-  const lH   = 22;
+  const row = d3.select("#map-legend-row");
+  const lW  = Math.min(260, mapW * 0.45);
 
-  const svg = row.append("svg")
-    .attr("width",  lW + 80)
-    .attr("height", lH + 14);
-
+  const svg  = row.append("svg").attr("width", lW + 80).attr("height", 36);
   const defs = svg.append("defs");
   const grad = defs.append("linearGradient").attr("id", "yrGrad").attr("x1","0%").attr("x2","100%");
+  const sqrtScale = gdpColorScale._sqrtScale;
+  const cap       = gdpColorScale._cap;
   d3.range(0, 1.01, 0.05).forEach(t => {
-    grad.append("stop").attr("offset", (t * 100) + "%").attr("stop-color", d3.interpolateYlOrRd(t));
+    const gdpVal   = t * cap;
+    const colorPos = sqrtScale(gdpVal);
+    grad.append("stop")
+      .attr("offset",     (t * 100) + "%")
+      .attr("stop-color", d3.interpolateYlOrRd(colorPos));
   });
 
   svg.append("text").attr("x", 32).attr("y", 12).attr("fill","#555").attr("font-size","9px")
     .attr("text-anchor","end").text("$0");
-
-  svg.append("rect")
-    .attr("x", 34).attr("y", 4)
-    .attr("width", lW).attr("height", 10)
-    .attr("rx", 2)
-    .style("fill","url(#yrGrad)");
-
+  svg.append("rect").attr("x", 34).attr("y", 4).attr("width", lW).attr("height", 10)
+    .attr("rx", 2).style("fill","url(#yrGrad)");
   svg.append("text").attr("x", 36 + lW).attr("y", 12).attr("fill","#555").attr("font-size","9px")
     .text("↑ GDP");
-
   svg.append("text").attr("x", 34 + lW/2).attr("y", 23).attr("fill","#444").attr("font-size","8.5px")
-    .attr("text-anchor","middle").text("GDP per Capita (USD, capped at 97th pct)");
-
-  // No-data swatch
+    .attr("text-anchor","middle").text("GDP per Capita (USD, capped at 97th pct) — √ scale");
   svg.append("rect").attr("x", 34 + lW + 38).attr("y", 4).attr("width", 10).attr("height", 10)
     .attr("rx", 1).attr("fill","#2e2e3e");
   svg.append("text").attr("x", 34 + lW + 50).attr("y", 12).attr("fill","#444").attr("font-size","8.5px")
@@ -462,7 +510,7 @@ function buildMapLegend(mapW) {
 }
 
 // ═══════════════════════════════════════════════════
-//  SCATTER PLOT
+//  SCATTER PLOT — INIT
 // ═══════════════════════════════════════════════════
 let scatterMargin, scatterW, scatterH;
 
@@ -489,16 +537,14 @@ function initScatter() {
     });
   });
   allGdp.sort(d3.ascending);
-  const gdpMax = d3.quantile(allGdp, 0.995) * 1.03;
 
-  xScale = d3.scaleLinear().domain([0, gdpMax]).range([0, scatterW]).nice();
-  yScale = d3.scaleLinear().domain([0, 130]).range([scatterH, 0]);
+  xScale = d3.scaleLinear().domain([0, 110000]).range([0, scatterW]).nice();
+  yScale = d3.scaleLinear().domain([0, 160]).range([scatterH, 0]);
 
   // Grid
   scatterG.append("g").attr("class","grid")
     .attr("transform", `translate(0,${scatterH})`)
     .call(d3.axisBottom(xScale).ticks(6).tickSize(-scatterH).tickFormat(""));
-
   scatterG.append("g").attr("class","grid")
     .call(d3.axisLeft(yScale).ticks(7).tickSize(-scatterW).tickFormat(""));
 
@@ -506,7 +552,6 @@ function initScatter() {
   const xAxisG = scatterG.append("g")
     .attr("transform", `translate(0,${scatterH})`)
     .call(d3.axisBottom(xScale).ticks(6).tickFormat(d => "$" + d3.format("~s")(d)));
-
   const yAxisG = scatterG.append("g")
     .call(d3.axisLeft(yScale).ticks(7).tickFormat(d => d + "%"));
 
@@ -519,140 +564,155 @@ function initScatter() {
   scatterG.append("text").attr("class","axis-label")
     .attr("x", scatterW / 2).attr("y", scatterH + 44)
     .attr("text-anchor","middle").text("GDP per Capita (USD)");
-
   scatterG.append("text").attr("class","axis-label")
     .attr("transform","rotate(-90)")
     .attr("x", -scatterH / 2).attr("y", -50)
     .attr("text-anchor","middle").text("Secondary School Enrollment (%)");
 
-  // Layers (trajectory below dots)
+  // Layers: traj behind dots, focus dot on top
   scatterG.append("g").attr("class","traj-layer");
   scatterG.append("g").attr("class","dots-layer");
+  scatterG.append("g").attr("class","focus-layer");
+
+  // "✕ Clear selection" button — SVG group, top-right of plot area
+  clearBtnG = scatterG.append("g")
+    .attr("class", "clear-btn-g")
+    .attr("transform", `translate(${scatterW}, 0)`)
+    .style("cursor", "pointer")
+    .style("display", "none");
+
+  clearBtnG.append("rect")
+    .attr("x", -102).attr("y", -13)
+    .attr("width", 102).attr("height", 17)
+    .attr("rx", 8)
+    .attr("fill", "#1a1a2e")
+    .attr("stroke", "#444466")
+    .attr("stroke-width", 0.8);
+  clearBtnG.append("text")
+    .attr("x", -51).attr("y", 0)
+    .attr("text-anchor", "middle")
+    .attr("fill", "#9999bb")
+    .attr("font-family", "Segoe UI, Arial, sans-serif")
+    .attr("font-size", "9.5px")
+    .text("✕ Clear selection");
+  clearBtnG.on("click", () => exitFocusMode());
 
   buildRegionButtons();
-  renderDots();   // initial draw
-}
-
-// ── Dots ──────────────────────────────────────────
-function dotX(d) {
-  const v = d.years[selectedYear]?.gdp_per_capita;
-  return (v != null && isFinite(v) && v > 0) ? xScale(v) : -999;
-}
-function dotY(d) {
-  const v = d.years[selectedYear]?.school_enrollment_secondary;
-  return (v != null && isFinite(v)) ? yScale(v) : -999;
-}
-function dotOpacity(d) {
-  if (hiddenRegions.has(d.region)) return 0;
-  const yr = d.years[selectedYear];
-  if (!yr) return 0;
-  const gdp = yr.gdp_per_capita;
-  const enr = yr.school_enrollment_secondary;
-  if (gdp == null || !isFinite(gdp) || gdp <= 0) return 0;
-  if (enr == null || !isFinite(enr)) return 0;
-  return yr.enrollment_missing ? 0.25 : 0.82;
-}
-function dotRadius(d) {
-  return selectedCountry && selectedCountry.country_code === d.country_code ? 6.5 : 4;
-}
-function dotStroke(d) {
-  return selectedCountry && selectedCountry.country_code === d.country_code ? "#fff" : "#0f1117";
-}
-function dotStrokeW(d) {
-  return selectedCountry && selectedCountry.country_code === d.country_code ? 1.8 : 0.5;
-}
-
-function renderDots() {
-  const layer = scatterG.select(".dots-layer");
-
-  // ENTER
-  const entered = layer.selectAll(".scatter-dot")
-    .data(countriesArr, d => d.country_code)
-    .join(
-      enter => enter.append("circle")
-        .attr("class", "scatter-dot")
-        .attr("cx",      d => dotX(d))
-        .attr("cy",      d => dotY(d))
-        .attr("r",       d => dotRadius(d))
-        .attr("fill",    d => REGION_COLORS(d.region))
-        .attr("opacity", d => dotOpacity(d))
-        .attr("stroke",  d => dotStroke(d))
-        .attr("stroke-width", d => dotStrokeW(d))
-        .on("mouseover", function(event, d) {
-          showTip(event, d);
-          if (!selectedCountry || selectedCountry.country_code !== d.country_code) {
-            d3.select(this).attr("r", 6).raise();
-          }
-        })
-        .on("mousemove", moveTip)
-        .on("mouseout",  function(event, d) {
-          hideTip();
-          d3.select(this).attr("r", dotRadius(d));
-        })
-        .on("click",     function(event, d) { handleCountrySelect(d); })
-    );
-}
-
-function updateDotsPosition() {
-  scatterG.select(".dots-layer").selectAll(".scatter-dot")
-    .transition().duration(450)
-    .attr("cx",      d => dotX(d))
-    .attr("cy",      d => dotY(d))
-    .attr("opacity", d => dotOpacity(d));
-}
-
-function updateDotsStyle() {
-  scatterG.select(".dots-layer").selectAll(".scatter-dot")
-    .attr("r",            d => dotRadius(d))
-    .attr("stroke",       d => dotStroke(d))
-    .attr("stroke-width", d => dotStrokeW(d));
-  // Bring selected dot to top
-  if (selectedCountry) {
-    scatterG.select(".dots-layer").selectAll(".scatter-dot")
-      .filter(d => d.country_code === selectedCountry.country_code)
-      .raise();
-  }
-}
-
-// ─ Region filter buttons ──────────────────────────
-function buildRegionButtons() {
-  d3.select("#region-filters")
-    .selectAll(".region-btn")
-    .data(REGIONS)
-    .join("button")
-      .attr("class", "region-btn")
-      .style("color", d => REGION_COLORS(d))
-      .style("border-color", d => REGION_COLORS(d))
-      .text(d => REGION_SHORT[d])
-      .on("click", function(event, d) {
-        if (hiddenRegions.has(d)) {
-          hiddenRegions.delete(d);
-          d3.select(this).classed("hidden-region", false);
-        } else {
-          hiddenRegions.add(d);
-          d3.select(this).classed("hidden-region", true);
-        }
-        // Animate opacity only (no position change)
-        scatterG.select(".dots-layer").selectAll(".scatter-dot")
-          .transition().duration(220)
-          .attr("opacity", dd => dotOpacity(dd));
-      });
+  renderDots();
 }
 
 // ═══════════════════════════════════════════════════
-//  TRAJECTORY PATH
+//  SCATTER DOTS
+// ═══════════════════════════════════════════════════
+function renderDots() {
+  scatterG.select(".dots-layer")
+    .selectAll(".scatter-dot")
+    .data(countriesArr, d => d.country_code)
+    .join(enter => enter.append("circle")
+      .attr("class", "scatter-dot")
+      .attr("r", 4)
+      .attr("fill",         d => REGION_COLORS(d.region))
+      .attr("stroke",       "#0f1117")
+      .attr("stroke-width", 0.5)
+    )
+    .on("mouseover", function(event, d) {
+      showTip(event, d);
+      d3.select(this).attr("r", 6).raise();
+    })
+    .on("mousemove", moveTip)
+    .on("mouseout",  function() {
+      hideTip();
+      d3.select(this).attr("r", 4);
+    })
+    .on("click", function(event, d) { handleCountrySelect(d); });
+
+  // Set initial position + visibility
+  applyDefaultMode();
+}
+
+// Shared attribute-setter for a dot selection using defaultDotState
+function _applyDefaultDotAttrs(sel, transition) {
+  const set = (s, attr, fn) => transition ? s.attr(attr, fn) : s.attr(attr, fn);
+  return sel
+    .attr("cx",           d => { const s = defaultDotState(d, selectedYear); return s.mode === "hide" ? -999 : s.cx; })
+    .attr("cy",           d => { const s = defaultDotState(d, selectedYear); return s.mode === "hide" ? -999 : s.cy; })
+    .attr("opacity",      d => { const s = defaultDotState(d, selectedYear); return s.mode === "full" ? 0.82 : s.mode === "ghost" ? 0.2 : 0; })
+    .attr("stroke",       "#0f1117")
+    .attr("stroke-width", 0.5);
+}
+
+// Sets all dots to their default-mode state (instant, no transition)
+function applyDefaultMode() {
+  const dots = scatterG.select(".dots-layer").selectAll(".scatter-dot");
+  _applyDefaultDotAttrs(dots, false);
+  dots
+    .attr("r", 4)
+    .style("pointer-events", d => defaultDotState(d, selectedYear).mode === "full" ? "auto" : "none")
+    .style("cursor", "pointer");
+}
+
+// Slider update in default mode: smooth transition of positions + opacity
+function updateDotsDefault() {
+  const dots = scatterG.select(".dots-layer").selectAll(".scatter-dot");
+  // pointer-events and cursor updated immediately (not transitionable)
+  dots
+    .style("pointer-events", d => defaultDotState(d, selectedYear).mode === "full" ? "auto" : "none")
+    .style("cursor", "pointer");
+  _applyDefaultDotAttrs(dots.transition().duration(450), true);
+}
+
+// ═══════════════════════════════════════════════════
+//  FOCUS MODE
+// ═══════════════════════════════════════════════════
+function enterFocusMode(country) {
+  selectedCountry = country;
+
+  // Dim all background dots; keep hidden-region dots invisible
+  const dots = scatterG.select(".dots-layer").selectAll(".scatter-dot");
+  dots.style("pointer-events", "none").style("cursor", "default");
+  dots.transition().duration(300)
+    .attr("opacity", d => hiddenRegions.has(d.region) ? 0 : 0.06)
+    .attr("r", 4)
+    .attr("stroke", "#0f1117")
+    .attr("stroke-width", 0.5);
+
+  drawTrajectory(country);
+  renderFocusDot(country);
+  clearBtnG.style("display", null);
+  updateMapHighlight();
+}
+
+function exitFocusMode() {
+  selectedCountry = null;
+
+  // Clear trajectory and focus dot layers
+  scatterG.select(".traj-layer").selectAll("*").remove();
+  scatterG.select(".focus-layer").selectAll("*").remove();
+
+  // Restore background dots with a transition
+  const dots = scatterG.select(".dots-layer").selectAll(".scatter-dot");
+  dots
+    .style("pointer-events", d => defaultDotState(d, selectedYear).mode === "full" ? "auto" : "none")
+    .style("cursor", "pointer");
+  _applyDefaultDotAttrs(dots.transition().duration(350), true).attr("r", 4);
+
+  clearBtnG.style("display", "none");
+  hideTip();
+  updateMapHighlight();
+}
+
+// ═══════════════════════════════════════════════════
+//  TRAJECTORY PATH (focus mode)
 // ═══════════════════════════════════════════════════
 function drawTrajectory(country) {
   const layer = scatterG.select(".traj-layer");
   layer.selectAll("*").remove();
-  if (!country) return;
 
   const pts = YEARS.map(y => {
-    const yr  = country.years[y];
-    const gdp = yr?.gdp_per_capita;
-    const enr = yr?.school_enrollment_secondary;
-    if (!isFinite(gdp) || gdp <= 0 || !isFinite(enr)) return null;
-    return { x: xScale(gdp), y: yScale(enr), year: y };
+    const x  = getScatterX(country, y);
+    const yv = getScatterY(country, y);
+    if (x === null || yv === null) return null;
+    return { x, y: yv, year: y };
   }).filter(Boolean);
 
   if (pts.length < 2) return;
@@ -664,75 +724,163 @@ function drawTrajectory(country) {
     .attr("class", "traj-path")
     .attr("d", lineGen);
 
-  // Small dots at each year — with year-prominent tooltip
-  layer.selectAll(".traj-dot")
-    .data(pts)
-    .join("circle")
-      .attr("class", "traj-dot")
-      .attr("cx", d => d.x)
-      .attr("cy", d => d.y)
-      .attr("r", 4)
-      .style("pointer-events", "all")
-      .style("cursor", "crosshair")
-      .on("mouseover", function(event, d) {
-        const yr  = country.years[d.year] || {};
-        const gdp = yr.gdp_per_capita;
-        const enr = yr.school_enrollment_secondary;
-        const hdi = yr.human_development_index;
-        ttDiv.html(`
-          <div class="tt-name" style="font-size:1rem;color:#e8712a">${d.year}</div>
-          <div style="color:#ccc;font-size:0.78rem;margin-bottom:3px">${country.country_name}</div>
-          <div>GDP/capita: ${fmt(gdp, "$")}</div>
-          <div>Enrollment: ${fmt(enr, "", "%", 1)}</div>
-          <div>HDI: ${fmt(hdi, "", "", 3)}</div>
-        `)
-        .style("display", "block");
-        moveTip(event);
-        d3.select(this).attr("r", 6).attr("opacity", 1);
-      })
-      .on("mousemove", moveTip)
-      .on("mouseout", function() {
-        hideTip();
-        d3.select(this).attr("r", 4).attr("opacity", 0.5);
-      });
+  // Milestone tick marks (non-interactive) at 2000, 2005, 2010, 2015, 2020
+  const MILESTONES = new Set([2000, 2005, 2010, 2015, 2020]);
+  const tickG = layer.append("g").style("pointer-events", "none");
 
-  // Year labels for first and last visible point, plus every 5th year
-  const labelYears = new Set([pts[0].year, pts[pts.length - 1].year]);
-  pts.forEach(p => { if (p.year % 5 === 0) labelYears.add(p.year); });
-
-  layer.selectAll(".traj-label")
-    .data(pts.filter(p => labelYears.has(p.year)))
-    .join("text")
+  pts.filter(p => MILESTONES.has(p.year)).forEach(p => {
+    // Small cross (+) at the milestone position
+    tickG.append("line")
+      .attr("x1", p.x - 4).attr("y1", p.y)
+      .attr("x2", p.x + 4).attr("y2", p.y)
+      .attr("stroke", "#8888aa").attr("stroke-width", 1.2);
+    tickG.append("line")
+      .attr("x1", p.x).attr("y1", p.y - 4)
+      .attr("x2", p.x).attr("y2", p.y + 4)
+      .attr("stroke", "#8888aa").attr("stroke-width", 1.2);
+    // Year label above tick
+    tickG.append("text")
       .attr("class", "traj-label")
-      .attr("x", d => d.x)
-      .attr("y", d => d.y - 5)
+      .attr("x", p.x)
+      .attr("y", p.y - 7)
       .attr("text-anchor", "middle")
-      .text(d => d.year);
+      .text(p.year);
+  });
 }
 
 // ═══════════════════════════════════════════════════
-//  COUNTRY SELECTION
+//  FOCUS DOT — single animated dot for selected country
+// ═══════════════════════════════════════════════════
+
+// Scan backward from (year-1) to find the most recent year with both
+// gdp and enrollment valid. Returns {x, y} in screen coords, or null.
+function getLastKnownPos(country, year) {
+  for (let y = year - 1; y >= 2000; y--) {
+    const lx = getScatterX(country, y);
+    const ly = getScatterY(country, y);
+    if (lx !== null && ly !== null) return { x: lx, y: ly };
+  }
+  return null;
+}
+
+// Returns the display state for the focus dot at the current year.
+//   mode "full"  — both values valid: show dot at data position
+//   mode "ghost" — gdp valid, enrollment null: show faded dashed dot
+//                  at last known valid position (or hide if none exists)
+//   mode "hide"  — gdp missing: hide entirely
+function focusDotState(country, year) {
+  const x  = getScatterX(country, year);
+  const yv = getScatterY(country, year);
+
+  if (x !== null && yv !== null) {
+    return { mode: "full",  cx: x,    cy: yv,   opacity: 1,   dash: null,  showLabel: true  };
+  }
+  if (x !== null) {
+    const last = getLastKnownPos(country, year);
+    if (last) {
+      return { mode: "ghost", cx: last.x, cy: last.y, opacity: 0.3, dash: "4 3", showLabel: false };
+    }
+  }
+  return { mode: "hide",  cx: -999, cy: -999, opacity: 0,   dash: null,  showLabel: false };
+}
+
+function renderFocusDot(country) {
+  const layer = scatterG.select(".focus-layer");
+  layer.selectAll("*").remove();
+
+  const s = focusDotState(country, selectedYear);
+
+  layer.append("circle")
+    .attr("class",        "focus-dot")
+    .attr("cx",           s.cx)
+    .attr("cy",           s.cy)
+    .attr("r",            7)
+    .attr("fill",         REGION_COLORS(country.region))
+    .attr("stroke",       "#ffffff")
+    .attr("stroke-width", s.mode === "ghost" ? 1.5 : 2)
+    .attr("stroke-dasharray", s.dash || null)
+    .attr("opacity",      s.opacity)
+    .style("cursor", "pointer")
+    .on("mouseover", function(event) { showTip(event, country); })
+    .on("mousemove", moveTip)
+    .on("mouseout",  hideTip)
+    .on("click",     () => handleCountrySelect(country));
+
+  layer.append("text")
+    .attr("class",       "focus-year-label")
+    .attr("x",           s.showLabel ? s.cx + 11 : -999)
+    .attr("y",           s.showLabel ? s.cy +  4 : -999)
+    .attr("fill",        "#ffffff")
+    .attr("font-size",   "9px")
+    .attr("font-family", "Segoe UI, Arial, sans-serif")
+    .style("pointer-events", "none")
+    .text(selectedYear);
+}
+
+// Smoothly move the focus dot to the new year's position
+function updateFocusDot() {
+  if (!selectedCountry) return;
+  const layer = scatterG.select(".focus-layer");
+  const s = focusDotState(selectedCountry, selectedYear);
+
+  layer.select(".focus-dot")
+    .transition().duration(450)
+    .attr("cx",               s.cx)
+    .attr("cy",               s.cy)
+    .attr("opacity",          s.opacity)
+    .attr("stroke-width",     s.mode === "ghost" ? 1.5 : 2)
+    .attr("stroke-dasharray", s.dash || null);
+
+  layer.select(".focus-year-label")
+    .transition().duration(450)
+    .attr("x", s.showLabel ? s.cx + 11 : -999)
+    .attr("y", s.showLabel ? s.cy +  4 : -999)
+    .text(selectedYear);
+}
+
+// ═══════════════════════════════════════════════════
+//  REGION FILTER BUTTONS
+// ═══════════════════════════════════════════════════
+function buildRegionButtons() {
+  d3.select("#region-filters")
+    .selectAll(".region-btn")
+    .data(REGIONS)
+    .join("button")
+      .attr("class", "region-btn")
+      .style("color",        d => REGION_COLORS(d))
+      .style("border-color", d => REGION_COLORS(d))
+      .text(d => REGION_SHORT[d])
+      .on("click", function(event, d) {
+        if (hiddenRegions.has(d)) {
+          hiddenRegions.delete(d);
+          d3.select(this).classed("hidden-region", false);
+        } else {
+          hiddenRegions.add(d);
+          d3.select(this).classed("hidden-region", true);
+        }
+
+        if (!selectedCountry) {
+          // Default mode: update visibility with transition
+          const dots = scatterG.select(".dots-layer").selectAll(".scatter-dot");
+          dots.style("pointer-events", dd => defaultDotVisible(dd) ? "auto" : "none");
+          dots.transition().duration(220)
+            .attr("opacity", dd => defaultDotVisible(dd) ? 0.82 : 0);
+        }
+        // In focus mode, region toggle has no visible effect on the dimmed context dots
+      });
+}
+
+// ═══════════════════════════════════════════════════
+//  COUNTRY SELECTION HANDLER
 // ═══════════════════════════════════════════════════
 function handleCountrySelect(country) {
-  const same = selectedCountry && selectedCountry.country_code === country.country_code;
-
-  // Deselect
-  selectedCountry = same ? null : country;
-  drawTrajectory(selectedCountry);
-  updateDotsStyle();
-
-  // Map: highlight selected country border
-  mapG.selectAll(".country-path")
-    .attr("stroke", d => {
-      if (!selectedCountry) return "#1a1a2e";
-      const c = isoLookup.get(parseInt(d.id, 10));
-      return c && c.country_code === selectedCountry.country_code ? "#fff" : "#1a1a2e";
-    })
-    .attr("stroke-width", d => {
-      if (!selectedCountry) return 0.35;
-      const c = isoLookup.get(parseInt(d.id, 10));
-      return c && c.country_code === selectedCountry.country_code ? 2 : 0.35;
-    });
+  if (selectedCountry && selectedCountry.country_code === country.country_code) {
+    // Same country clicked — exit focus mode
+    exitFocusMode();
+  } else {
+    // New country (or first click) — enter / switch focus mode
+    enterFocusMode(country);
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -742,23 +890,32 @@ d3.select("#year-slider").on("input", function() {
   selectedYear = +this.value;
   d3.select("#year-display").text(selectedYear);
   updateMapColors();
-  updateDotsPosition();
+
+  if (selectedCountry) {
+    // Focus mode: animate the single focus dot; silently reposition context dots
+    updateFocusDot();
+    scatterG.select(".dots-layer").selectAll(".scatter-dot")
+      .attr("cx", d => { const x = getScatterX(d, selectedYear); return x !== null ? x : -999; })
+      .attr("cy", d => { const yv = getScatterY(d, selectedYear); return yv !== null ? yv : -999; });
+  } else {
+    // Default mode: smooth transition of all visible dots
+    updateDotsDefault();
+  }
 });
 
 // ═══════════════════════════════════════════════════
 //  MAIN — load data & initialise
 // ═══════════════════════════════════════════════════
 async function main() {
-  // countries.json has Python-serialised NaN — not valid JSON; fix it first
+  // countries.json has Python-serialised NaN — fix before parsing
   const [rawText, topo] = await Promise.all([
     fetch("data/countries.json").then(r => r.text()),
     fetch("data/world-110m.json").then(r => r.json())
   ]);
 
-  const cleaned = rawText.replace(/\bNaN\b/g, "null");
+  const cleaned  = rawText.replace(/\bNaN\b/g, "null");
   const countries = JSON.parse(cleaned);
 
-  // Build lookup structures
   countries.forEach(c => {
     countriesArr.push(c);
     isoLookup.set(c.iso_numeric, c);
@@ -766,6 +923,25 @@ async function main() {
   });
 
   gdpColorScale = buildGdpColorScale();
+
+  // ── DIAGNOSTIC: AUS data ───────────────────────────
+  const aus = countriesArr.find(c => c.country_code === "AUS");
+  console.log("AUS iso_numeric:", aus?.iso_numeric);
+  console.log("AUS region:", aus?.region);
+  console.log("AUS years with enrollment data:");
+  Object.entries(aus?.years || {}).forEach(([y, v]) => {
+    if (v.school_enrollment_secondary != null)
+      console.log(y, v.school_enrollment_secondary);
+  });
+  console.log("AUS years with GDP data:");
+  Object.entries(aus?.years || {}).forEach(([y, v]) => {
+    if (v.gdp_per_capita != null)
+      console.log(y, v.gdp_per_capita);
+  });
+  const ausFeature = topojson.feature(topo, topo.objects.countries)
+    .features.find(f => parseInt(f.id, 10) === 36);
+  console.log("AUS TopoJSON feature found:", !!ausFeature, ausFeature?.id);
+  // ── END DIAGNOSTIC ─────────────────────────────────
 
   initMap(topo);
   initScatter();
