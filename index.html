@@ -257,9 +257,9 @@ body {
 <div id="tooltip"></div>
 
 <script>
-// ═══════════════════════════════════════════════════
+
 //  CONSTANTS & STATE
-// ═══════════════════════════════════════════════════
+
 const YEARS = d3.range(2000, 2021);   // [2000 … 2020]
 
 const REGIONS = [
@@ -299,9 +299,9 @@ let xScale, yScale;
 let scatterG, mapG;
 let clearBtnG;   // SVG group for "✕ Clear selection"
 
-// ═══════════════════════════════════════════════════
+
 //  TOOLTIP
-// ═══════════════════════════════════════════════════
+
 const ttDiv = d3.select("#tooltip");
 
 function fmt(v, prefix = "", suffix = "", decimals = 0) {
@@ -334,9 +334,9 @@ function moveTip(event) {
 
 function hideTip() { ttDiv.style("display", "none"); }
 
-// ═══════════════════════════════════════════════════
+
 //  DATA HELPERS
-// ═══════════════════════════════════════════════════
+
 // Returns true only when BOTH gdp and enrollment are valid for this year
 function hasValidData(country, year) {
   const yr  = country.years[year];
@@ -383,9 +383,8 @@ function defaultDotState(d, year) {
   return { mode: "hide" };
 }
 
-// ═══════════════════════════════════════════════════
 //  COLOR SCALE
-// ═══════════════════════════════════════════════════
+
 function buildGdpColorScale() {
   const vals = [];
   countriesArr.forEach(c => {
@@ -412,9 +411,9 @@ function mapColor(isoId) {
   return gdpColorScale(v);
 }
 
-// ═══════════════════════════════════════════════════
+
 //  CHOROPLETH MAP
-// ═══════════════════════════════════════════════════
+
 function initMap(topo) {
   const el   = document.getElementById("map-svg");
   const rect = el.getBoundingClientRect();
@@ -509,9 +508,9 @@ function buildMapLegend(mapW) {
     .text("No data");
 }
 
-// ═══════════════════════════════════════════════════
+
 //  SCATTER PLOT — INIT
-// ═══════════════════════════════════════════════════
+
 let scatterMargin, scatterW, scatterH;
 
 function initScatter() {
@@ -520,7 +519,7 @@ function initScatter() {
   const W    = rect.width  || 560;
   const H    = rect.height || 420;
 
-  scatterMargin = { top: 16, right: 20, bottom: 56, left: 62 };
+  scatterMargin = { top: 16, right: 20, bottom: 72, left: 62 };
   scatterW      = W - scatterMargin.left - scatterMargin.right;
   scatterH      = H - scatterMargin.top  - scatterMargin.bottom;
 
@@ -562,7 +561,7 @@ function initScatter() {
 
   // Axis labels
   scatterG.append("text").attr("class","axis-label")
-    .attr("x", scatterW / 2).attr("y", scatterH + 44)
+    .attr("x", scatterW / 2).attr("y", scatterH + 52)
     .attr("text-anchor","middle").text("GDP per Capita (USD)");
   scatterG.append("text").attr("class","axis-label")
     .attr("transform","rotate(-90)")
@@ -601,9 +600,9 @@ function initScatter() {
   renderDots();
 }
 
-// ═══════════════════════════════════════════════════
+
 //  SCATTER DOTS
-// ═══════════════════════════════════════════════════
+
 function renderDots() {
   scatterG.select(".dots-layer")
     .selectAll(".scatter-dot")
@@ -661,9 +660,9 @@ function updateDotsDefault() {
   _applyDefaultDotAttrs(dots.transition().duration(450), true);
 }
 
-// ═══════════════════════════════════════════════════
+
 //  FOCUS MODE
-// ═══════════════════════════════════════════════════
+
 function enterFocusMode(country) {
   selectedCountry = country;
 
@@ -701,9 +700,9 @@ function exitFocusMode() {
   updateMapHighlight();
 }
 
-// ═══════════════════════════════════════════════════
+
 //  TRAJECTORY PATH (focus mode)
-// ═══════════════════════════════════════════════════
+
 function drawTrajectory(country) {
   const layer = scatterG.select(".traj-layer");
   layer.selectAll("*").remove();
@@ -724,7 +723,7 @@ function drawTrajectory(country) {
     .attr("class", "traj-path")
     .attr("d", lineGen);
 
-  // Milestone tick marks (non-interactive) at 2000, 2005, 2010, 2015, 2020
+  // Milestone tick marks (not interactive) at 2000, 2005, 2010, 2015, 2020
   const MILESTONES = new Set([2000, 2005, 2010, 2015, 2020]);
   const tickG = layer.append("g").style("pointer-events", "none");
 
@@ -748,9 +747,9 @@ function drawTrajectory(country) {
   });
 }
 
-// ═══════════════════════════════════════════════════
-//  FOCUS DOT — single animated dot for selected country
-// ═══════════════════════════════════════════════════
+
+//  FOCUS DOT - single animated dot for selected country
+
 
 // Scan backward from (year-1) to find the most recent year with both
 // gdp and enrollment valid. Returns {x, y} in screen coords, or null.
@@ -838,9 +837,8 @@ function updateFocusDot() {
     .text(selectedYear);
 }
 
-// ═══════════════════════════════════════════════════
 //  REGION FILTER BUTTONS
-// ═══════════════════════════════════════════════════
+
 function buildRegionButtons() {
   d3.select("#region-filters")
     .selectAll(".region-btn")
@@ -870,9 +868,8 @@ function buildRegionButtons() {
       });
 }
 
-// ═══════════════════════════════════════════════════
 //  COUNTRY SELECTION HANDLER
-// ═══════════════════════════════════════════════════
+
 function handleCountrySelect(country) {
   if (selectedCountry && selectedCountry.country_code === country.country_code) {
     // Same country clicked — exit focus mode
@@ -883,9 +880,8 @@ function handleCountrySelect(country) {
   }
 }
 
-// ═══════════════════════════════════════════════════
 //  YEAR SLIDER
-// ═══════════════════════════════════════════════════
+
 d3.select("#year-slider").on("input", function() {
   selectedYear = +this.value;
   d3.select("#year-display").text(selectedYear);
@@ -903,9 +899,9 @@ d3.select("#year-slider").on("input", function() {
   }
 });
 
-// ═══════════════════════════════════════════════════
+
 //  MAIN — load data & initialise
-// ═══════════════════════════════════════════════════
+
 async function main() {
   // countries.json has Python-serialised NaN — fix before parsing
   const [rawText, topo] = await Promise.all([
@@ -924,24 +920,7 @@ async function main() {
 
   gdpColorScale = buildGdpColorScale();
 
-  // ── DIAGNOSTIC: AUS data ───────────────────────────
-  const aus = countriesArr.find(c => c.country_code === "AUS");
-  console.log("AUS iso_numeric:", aus?.iso_numeric);
-  console.log("AUS region:", aus?.region);
-  console.log("AUS years with enrollment data:");
-  Object.entries(aus?.years || {}).forEach(([y, v]) => {
-    if (v.school_enrollment_secondary != null)
-      console.log(y, v.school_enrollment_secondary);
-  });
-  console.log("AUS years with GDP data:");
-  Object.entries(aus?.years || {}).forEach(([y, v]) => {
-    if (v.gdp_per_capita != null)
-      console.log(y, v.gdp_per_capita);
-  });
-  const ausFeature = topojson.feature(topo, topo.objects.countries)
-    .features.find(f => parseInt(f.id, 10) === 36);
-  console.log("AUS TopoJSON feature found:", !!ausFeature, ausFeature?.id);
-  // ── END DIAGNOSTIC ─────────────────────────────────
+
 
   initMap(topo);
   initScatter();
