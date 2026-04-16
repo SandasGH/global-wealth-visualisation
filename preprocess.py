@@ -4,8 +4,9 @@ import json
 import os
 
 # ── 1. LOAD ───────────────────────────────────────────────────────────────────
+# Primary source: Global Development Indicators (GDP, HDI, life expectancy, population, region)
 df = pd.read_csv("Global_Development_Indicators_2000_2020.csv")
-print(f"Loaded {len(df)} rows")
+print(f"Loaded {len(df)} rows from Global_Development_Indicators_2000_2020.csv")
 
 cols = [
     "year", "country_code", "country_name", "region",
@@ -14,22 +15,53 @@ cols = [
 ]
 df = df[cols].copy()
 
+# Secondary source: world-education-data.csv (primary enrollment source)
+edu = pd.read_csv("world-education-data.csv")
+print(f"Loaded {len(edu)} rows from world-education-data.csv")
+edu = edu[["country_code", "year", "school_enrol_secondary_pct"]].copy()
+
 # ── 2. FILTER TO VALID ISO3 CODES ─────────────────────────────────────────────
 iso3_mask = df["country_code"].str.match(r"^[A-Z]{3}$", na=False)
 print(f"Dropping {(~iso3_mask).sum()} rows with non-ISO3 codes")
 df = df[iso3_mask].copy()
 
 # ── 3. FILTER YEARS ───────────────────────────────────────────────────────────
-df = df[df["year"].between(2000, 2020)].copy()
-print(f"After year filter: {len(df)} rows")
+df  = df[df["year"].between(2000, 2020)].copy()
+edu = edu[edu["year"].between(2000, 2020)].copy()
+print(f"After year filter: {len(df)} rows (GDI), {len(edu)} rows (world-education)")
 
-# ── 4. HANDLE MISSING REGION ──────────────────────────────────────────────────
+# ── 4. MERGE ENROLLMENT DATA ──────────────────────────────────────────────────
+df = df.merge(edu, on=["country_code", "year"], how="left")
+print(f"After merge: {len(df)} rows, {df['country_code'].nunique()} unique country codes")
+matched = df["school_enrol_secondary_pct"].notna().sum()
+print(f"Rows matched with world-education enrollment data: {matched}")
+
+# ── 5. HANDLE MISSING REGION ──────────────────────────────────────────────────
 print(f"Rows with missing region: {df['region'].isna().sum()}")
 df["region"] = df["region"].fillna("Unknown")
 
-# ── 5. FLAG MISSING ENROLLMENT ────────────────────────────────────────────────
-df["enrollment_missing"] = df["school_enrollment_secondary"].isna()
-print(f"Rows with missing school enrollment: {df['enrollment_missing'].sum()}")
+# ── 6. RESOLVE ENROLLMENT WITH SOURCE TRACKING ────────────────────────────────
+# Priority: world-education-data > GDI fallback > missing
+def resolve_enrollment(row):
+    if pd.notna(row["school_enrol_secondary_pct"]):
+        return row["school_enrol_secondary_pct"], "provided", False
+    elif pd.notna(row["school_enrollment_secondary"]):
+        return row["school_enrollment_secondary"], "supplementary", False
+    else:
+        return None, "missing", True
+
+resolved = df.apply(resolve_enrollment, axis=1, result_type="expand")
+df["school_enrollment_secondary"] = resolved[0]
+df["enrollment_source"]           = resolved[1]
+df["enrollment_missing"]          = resolved[2]
+
+n_provided      = (df["enrollment_source"] == "provided").sum()
+n_supplementary = (df["enrollment_source"] == "supplementary").sum()
+n_missing       = (df["enrollment_source"] == "missing").sum()
+print(f"Enrollment source breakdown:")
+print(f"  provided (world-education):  {n_provided}")
+print(f"  supplementary (GDI fallback): {n_supplementary}")
+print(f"  missing (both null):          {n_missing}")
 
 # ── 6. ISO3 → NUMERIC LOOKUP ──────────────────────────────────────────────────
 iso3_to_numeric = {
@@ -101,6 +133,7 @@ for _, row in df.iterrows():
         "gdp_per_capita":              row["gdp_per_capita"],
         "school_enrollment_secondary": row["school_enrollment_secondary"],
         "enrollment_missing":          bool(row["enrollment_missing"]),
+        "enrollment_source":           row["enrollment_source"],
         "human_development_index":     row["human_development_index"],
         "life_expectancy":             row["life_expectancy"],
         "population":                  row["population"],
@@ -117,4 +150,4 @@ print(f"\nWritten {len(output)} country objects to data/countries.json")
 sample = output[0]
 print(f"Sample: {sample['country_code']} | {sample['country_name']} | region: {sample['region']} | iso_numeric: {sample['iso_numeric']}")
 print(f"Years available: {sorted(sample['years'].keys())}")
-print("\nDone ✓")
+print("\nDone.")
