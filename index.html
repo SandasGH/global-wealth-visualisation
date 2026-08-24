@@ -903,14 +903,10 @@ d3.select("#year-slider").on("input", function() {
 // load data and kick everything off
 
 async function main() {
-  // countries.json has Python-serialised NaN — fix before parsing
-  const [rawText, topo] = await Promise.all([
-    fetch("data/countries.json").then(r => r.text()),
+  const [countries, topo] = await Promise.all([
+    fetch("data/countries.json").then(r => r.json()),
     fetch("data/world-110m.json").then(r => r.json())
   ]);
-
-  const cleaned  = rawText.replace(/\bNaN\b/g, "null");
-  const countries = JSON.parse(cleaned);
 
   countries.forEach(c => {
     countriesArr.push(c);

@@ -1,11 +1,19 @@
-# preprocess.py
-import pandas as pd
+import argparse
 import json
-import os
+from pathlib import Path
+
+import pandas as pd
+
+parser = argparse.ArgumentParser(
+    description='Build the derived visualisation dataset from coursework CSV inputs.'
+)
+parser.add_argument('--source-dir', type=Path, default=Path('.'))
+parser.add_argument('--output', type=Path, default=Path('data/countries.json'))
+args = parser.parse_args()
 
 # ── 1. LOAD ───────────────────────────────────────────────────────────────────
 # Primary source: Global Development Indicators (GDP, HDI, life expectancy, population, region)
-df = pd.read_csv("Global_Development_Indicators_2000_2020.csv")
+df = pd.read_csv(args.source_dir / 'Global_Development_Indicators_2000_2020.csv')
 print(f"Loaded {len(df)} rows from Global_Development_Indicators_2000_2020.csv")
 
 cols = [
@@ -16,7 +24,7 @@ cols = [
 df = df[cols].copy()
 
 # Secondary source: world-education-data.csv (primary enrollment source)
-edu = pd.read_csv("world-education-data.csv")
+edu = pd.read_csv(args.source_dir / 'world-education-data.csv')
 print(f"Loaded {len(edu)} rows from world-education-data.csv")
 edu = edu[["country_code", "year", "school_enrol_secondary_pct"]].copy()
 
@@ -116,7 +124,7 @@ df["life_expectancy"]             = df["life_expectancy"].round(2)
 df["iso_numeric"]                 = df["iso_numeric"].astype(int)
 
 # ── 9. BUILD NESTED JSON ──────────────────────────────────────────────────────
-df = df.where(pd.notnull(df), None)
+df = df.astype(object).where(pd.notnull(df), None)
 
 nested = {}
 for _, row in df.iterrows():
@@ -142,11 +150,12 @@ for _, row in df.iterrows():
 output = list(nested.values())
 
 # ── 10. WRITE OUTPUT ──────────────────────────────────────────────────────────
-os.makedirs("data", exist_ok=True)
-with open("data/countries.json", "w", encoding="utf-8") as f:
-    json.dump(output, f, separators=(",", ":"))
+# Serialise in memory first so allow_nan=False fails before touching the output.
+payload = json.dumps(output, separators=(',', ':'), allow_nan=False)
+args.output.parent.mkdir(parents=True, exist_ok=True)
+args.output.write_text(payload + '\n', encoding='utf-8')
 
-print(f"\nWritten {len(output)} country objects to data/countries.json")
+print(f"\nWritten {len(output)} country objects to {args.output}")
 sample = output[0]
 print(f"Sample: {sample['country_code']} | {sample['country_name']} | region: {sample['region']} | iso_numeric: {sample['iso_numeric']}")
 print(f"Years available: {sorted(sample['years'].keys())}")
